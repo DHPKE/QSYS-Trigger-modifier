@@ -116,7 +116,7 @@ function GetControlLayout(props)
     table.insert(graphics, { Type="Label", Text="Mode:",
       FontSize=9, Color=cText, HTextAlign="Right", Position={4,y+3}, Size={44,16} })
     layout["Mode"] = {
-      PrettyName="Mode", Style="ComboBox", Choices=modeChoices, TextFontSize=10,
+      PrettyName="Mode", Style="ComboBox", TextFontSize=10,
       Position={52,y}, Size={114,20},
     }
     table.insert(graphics, { Type="Label", Text="Step:",
@@ -199,7 +199,7 @@ function GetControlLayout(props)
     -- Type (col 3)
     layout[p.."Type"] = {
       PrettyName=string.format("Output %d~Type", i),
-      Style="ComboBox", Choices=typeChoices, TextFontSize=9,
+      Style="ComboBox", TextFontSize=9,
       Position={cols[3].x+2, ry+3}, Size={cols[3].w-4, rowH-6},
     }
 
@@ -227,7 +227,7 @@ function GetControlLayout(props)
     -- Curve (col 7)
     layout[p.."Curve"] = {
       PrettyName=string.format("Output %d~Curve", i),
-      Style="ComboBox", Choices=curveChoices, TextFontSize=9,
+      Style="ComboBox", TextFontSize=9,
       Position={cols[7].x+2, ry+3}, Size={cols[7].w-4, rowH-6},
     }
 
@@ -473,6 +473,15 @@ if Controls then
     if c.String ~= "" then onTrigger() end
   end
   Controls.Value_In.EventHandler    = function()    onTrigger() end
+
+  -- Set Choices on ComboBox controls at runtime (Q-SYS requires this)
+  Controls.Mode.Choices = modeChoices
+  for i = 1, numOut do
+    local tc = Controls[string.format("Out%d_Type",  i)]
+    local cc = Controls[string.format("Out%d_Curve", i)]
+    if tc then tc.Choices = typeChoices  end
+    if cc then cc.Choices = curveChoices end
+  end
 
   -- Initial display
   do
