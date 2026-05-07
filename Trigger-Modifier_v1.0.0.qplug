@@ -1,0 +1,483 @@
+-- Trigger Modifier v1.0.0
+-- Converts any input (trigger / bool / string / numeric) to typed outputs
+-- with per-output delay, fade, curve, and toggle-step mode.
+-- Inspired by the Node-RED change node.
+
+PluginInfo = {
+  Name        = "Trigger Modifier~Trigger Modifier",
+  Version     = "1.0.0",
+  Id          = "DHPKE.TriggerModifier.1.0.0",
+  Description = "Converts any input to typed outputs with delay, fade, and toggle-step mode",
+  ShowDebug   = false,
+}
+
+function GetColor()      return { 40, 100, 180 } end
+function GetPrettyName() return "Trigger Modifier"  end
+
+function GetProperties()
+  return {
+    { Name = "Outputs", Type = "integer", Min = 1, Max = 16, Value = 4 },
+  }
+end
+
+function RectifyProperties(props) return props end
+
+local typeChoices  = { "Trigger", "Boolean On", "Boolean Off", "String", "Numeric" }
+local curveChoices = { "Linear", "Ease In", "Ease Out", "Ease In/Out" }
+local modeChoices  = { "Fire All", "Toggle Step" }
+
+-- ─────────────────────────────────────────────────────────────────
+--  CONTROLS
+-- ─────────────────────────────────────────────────────────────────
+function GetControls(props)
+  local n = props["Outputs"].Value
+  local c = {}
+
+  -- Inputs (any one fires the outputs)
+  table.insert(c, { Name="Trigger_In",   ControlType="Button", ButtonType="Trigger", PinStyle="Input",  UserPin=true })
+  table.insert(c, { Name="Bool_In",      ControlType="Button", ButtonType="Toggle",  PinStyle="Input",  UserPin=true })
+  table.insert(c, { Name="String_In",    ControlType="Text",                          PinStyle="Input",  UserPin=true })
+  table.insert(c, { Name="Value_In",     ControlType="Text",                          PinStyle="Input",  UserPin=true })
+
+  -- Mode / toggle
+  table.insert(c, { Name="Mode",         ControlType="Text",   PinStyle="Both",   UserPin=true })
+  table.insert(c, { Name="Toggle_Index", ControlType="Text",   PinStyle="Output", UserPin=true })
+  table.insert(c, { Name="Toggle_Reset", ControlType="Button", ButtonType="Trigger", PinStyle="Input", UserPin=true })
+
+  -- Per-output controls
+  for i = 1, n do
+    local p = string.format("Out%d_", i)
+    table.insert(c, { Name=p.."Enabled", ControlType="Button", ButtonType="Toggle", PinStyle="Input",  UserPin=false })
+    table.insert(c, { Name=p.."Type",    ControlType="Text",                         PinStyle="Both",   UserPin=true })
+    table.insert(c, { Name=p.."Value",   ControlType="Text",                         PinStyle="Both",   UserPin=true })
+    table.insert(c, { Name=p.."Delay",   ControlType="Text",                         PinStyle="Both",   UserPin=true })
+    table.insert(c, { Name=p.."Fade",    ControlType="Text",                         PinStyle="Both",   UserPin=true })
+    table.insert(c, { Name=p.."Curve",   ControlType="Text",                         PinStyle="Both",   UserPin=true })
+    table.insert(c, { Name=p.."Output",  ControlType="Text",                         PinStyle="Output", UserPin=true })
+    table.insert(c, { Name=p.."Active",  ControlType="Button", ButtonType="Toggle",  PinStyle="Output", UserPin=false })
+  end
+
+  return c
+end
+
+-- ─────────────────────────────────────────────────────────────────
+--  LAYOUT
+-- ─────────────────────────────────────────────────────────────────
+local W    = 900
+local tY   = 90    -- y where the output table starts
+local tHdr = 22    -- header row height
+local rowH = 24    -- output row height
+
+-- Column definitions [x_start, width]
+local cols = {
+  { x=4,   w=16  },  -- 1  #  / Active LED
+  { x=22,  w=60  },  -- 2  Enabled
+  { x=84,  w=128 },  -- 3  Type
+  { x=214, w=160 },  -- 4  Value
+  { x=376, w=72  },  -- 5  Delay (s)
+  { x=450, w=72  },  -- 6  Fade (s)
+  { x=524, w=112 },  -- 7  Curve
+  { x=638, w=258 },  -- 8  Output  (fills to W-4)
+}
+
+local function rowY(i) return tY + tHdr + (i - 1) * rowH end
+
+function GetControlLayout(props)
+  local n = props["Outputs"].Value
+  local H = rowY(n) + rowH + 4
+
+  local layout, graphics = {}, {}
+
+  -- Palette
+  local cBg     = { 28, 33, 44 }
+  local cAccent = { 40, 100, 180 }
+  local cHead   = { 45, 56, 80 }
+  local cOdd    = { 36, 41, 53 }
+  local cEven   = { 40, 46, 60 }
+  local cText   = { 205, 210, 225 }
+  local cGreen  = { 55, 195, 90 }
+  local cOrange = { 210, 125, 30 }
+  local cPurple = { 110, 75, 195 }
+
+  -- Background
+  table.insert(graphics, { Type="GroupBox", Fill=cBg, StrokeWidth=0, Position={0,0}, Size={W,H} })
+
+  -- Title bar
+  table.insert(graphics, { Type="GroupBox", Fill=cAccent, StrokeWidth=0, Position={0,0}, Size={W,26} })
+  table.insert(graphics, {
+    Type="Label", Text="TRIGGER MODIFIER", FontSize=12,
+    Font="Helvetica", FontStyle="Bold", Color={255,255,255},
+    HTextAlign="Left", Position={10,4}, Size={260,18},
+  })
+
+  -- ── Row 1 (y=30): Mode + Toggle controls ───────────────────
+  do
+    local y = 30
+    table.insert(graphics, { Type="Label", Text="Mode:",
+      FontSize=9, Color=cText, HTextAlign="Right", Position={4,y+3}, Size={44,16} })
+    layout["Mode"] = {
+      PrettyName="Mode", Style="ComboBox", Choices=modeChoices, TextFontSize=10,
+      Position={52,y}, Size={114,20},
+    }
+    table.insert(graphics, { Type="Label", Text="Step:",
+      FontSize=9, Color=cText, HTextAlign="Right", Position={174,y+3}, Size={32,16} })
+    layout["Toggle_Index"] = {
+      PrettyName="Toggle Step", Style="Text", TextFontSize=10, HTextAlign="Center",
+      Position={210,y}, Size={52,20},
+    }
+    layout["Toggle_Reset"] = {
+      PrettyName="Toggle Reset", Style="Button", ButtonStyle="Trigger",
+      Legend="RESET", FontSize=8, Color=cOrange, UnlinkOffColor=true,
+      Position={270,y}, Size={52,20},
+    }
+  end
+
+  -- ── Row 2 (y=56): Inputs ────────────────────────────────────
+  do
+    local y = 56
+    table.insert(graphics, { Type="Label", Text="Inputs →",
+      FontSize=9, Color=cText, HTextAlign="Left", Position={4,y+3}, Size={52,16} })
+    layout["Trigger_In"] = {
+      PrettyName="Trigger Input", Style="Button", ButtonStyle="Trigger",
+      Legend="TRIGGER", FontSize=9, Color=cPurple, UnlinkOffColor=true,
+      Position={60,y}, Size={72,20},
+    }
+    layout["Bool_In"] = {
+      PrettyName="Boolean Input", Style="Button", ButtonStyle="Toggle",
+      Legend="BOOL", FontSize=9, Color={55,160,55}, UnlinkOffColor=true,
+      Position={138,y}, Size={54,20},
+    }
+    layout["String_In"] = {
+      PrettyName="String Input", Style="TextBox", TextFontSize=9,
+      Position={198,y}, Size={130,20},
+    }
+    layout["Value_In"] = {
+      PrettyName="Numeric Input", Style="TextBox", TextFontSize=9,
+      Position={334,y}, Size={90,20},
+    }
+  end
+
+  -- Separator
+  table.insert(graphics, { Type="GroupBox", Fill={50,55,70}, StrokeWidth=0,
+    Position={4,tY-4}, Size={W-8,2} })
+
+  -- ── Table header ─────────────────────────────────────────────
+  local hLabels = { "#", "Enabled", "Type", "Value", "Delay (s)", "Fade (s)", "Curve", "Output" }
+  table.insert(graphics, { Type="GroupBox", Fill=cHead, StrokeWidth=0,
+    Position={2,tY}, Size={W-4,tHdr} })
+  for k, lbl in ipairs(hLabels) do
+    table.insert(graphics, {
+      Type="Label", Text=lbl, FontSize=8, Font="Helvetica", FontStyle="Bold",
+      Color={195,205,235}, HTextAlign="Center",
+      Position={cols[k].x+2, tY+4}, Size={cols[k].w-4, 14},
+    })
+  end
+
+  -- ── Output rows ───────────────────────────────────────────────
+  for i = 1, n do
+    local ry = rowY(i)
+    local bg = (i % 2 == 1) and cOdd or cEven
+    local p  = string.format("Out%d_", i)
+
+    table.insert(graphics, { Type="GroupBox", Fill=bg, StrokeWidth=0, Position={2,ry}, Size={W-4,rowH} })
+
+    -- Active LED (col 1)
+    layout[p.."Active"] = {
+      PrettyName=string.format("Output %d~Active", i),
+      Style="Button", ButtonStyle="Toggle", Legend="", Color=cGreen, UnlinkOffColor=true,
+      Position={cols[1].x+2, ry+6}, Size={cols[1].w-4, rowH-12},
+    }
+
+    -- Enabled (col 2)
+    layout[p.."Enabled"] = {
+      PrettyName=string.format("Output %d~Enabled", i),
+      Style="Button", ButtonStyle="Toggle", Legend="ON", FontSize=8,
+      Color=cGreen, UnlinkOffColor=true,
+      Position={cols[2].x+3, ry+3}, Size={cols[2].w-6, rowH-6},
+    }
+
+    -- Type (col 3)
+    layout[p.."Type"] = {
+      PrettyName=string.format("Output %d~Type", i),
+      Style="ComboBox", Choices=typeChoices, TextFontSize=9,
+      Position={cols[3].x+2, ry+3}, Size={cols[3].w-4, rowH-6},
+    }
+
+    -- Value (col 4)
+    layout[p.."Value"] = {
+      PrettyName=string.format("Output %d~Value", i),
+      Style="TextBox", TextFontSize=9,
+      Position={cols[4].x+2, ry+3}, Size={cols[4].w-4, rowH-6},
+    }
+
+    -- Delay (col 5)
+    layout[p.."Delay"] = {
+      PrettyName=string.format("Output %d~Delay (s)", i),
+      Style="TextBox", TextFontSize=9,
+      Position={cols[5].x+2, ry+3}, Size={cols[5].w-4, rowH-6},
+    }
+
+    -- Fade (col 6)
+    layout[p.."Fade"] = {
+      PrettyName=string.format("Output %d~Fade (s)", i),
+      Style="TextBox", TextFontSize=9,
+      Position={cols[6].x+2, ry+3}, Size={cols[6].w-4, rowH-6},
+    }
+
+    -- Curve (col 7)
+    layout[p.."Curve"] = {
+      PrettyName=string.format("Output %d~Curve", i),
+      Style="ComboBox", Choices=curveChoices, TextFontSize=9,
+      Position={cols[7].x+2, ry+3}, Size={cols[7].w-4, rowH-6},
+    }
+
+    -- Output display / pin (col 8)
+    layout[p.."Output"] = {
+      PrettyName=string.format("Output %d", i),
+      Style="Text", TextFontSize=9,
+      Position={cols[8].x+2, ry+3}, Size={cols[8].w-4, rowH-6},
+    }
+  end
+
+  return layout, graphics
+end
+
+-- ═══════════════════════════════════════════════════════════════
+--  R U N T I M E
+-- ═══════════════════════════════════════════════════════════════
+if Controls then
+
+  -- Count configured outputs
+  local numOut = 0
+  for i = 1, 32 do
+    if Controls[string.format("Out%d_Enabled", i)] ~= nil then
+      numOut = i
+    else
+      break
+    end
+  end
+
+  -- ── Defaults (only applied when fields are blank / unset) ───
+  if Controls.Mode.String == "" then Controls.Mode.String = "Fire All" end
+  Controls.Toggle_Index.String = "1/1"
+
+  -- Default-enable Output 1 on very first load (all disabled → enable #1)
+  do
+    local anyOn = false
+    for i = 1, numOut do
+      local e = Controls[string.format("Out%d_Enabled", i)]
+      if e and e.Boolean then anyOn = true; break end
+    end
+    if not anyOn and Controls["Out1_Enabled"] then
+      Controls["Out1_Enabled"].Boolean = true
+    end
+  end
+
+  for i = 1, numOut do
+    local p  = string.format("Out%d_", i)
+    local tc = Controls[p.."Type"]
+    local dc = Controls[p.."Delay"]
+    local fc = Controls[p.."Fade"]
+    local cc = Controls[p.."Curve"]
+    if tc and tc.String == "" then tc.String = "Trigger" end
+    if dc and dc.String == "" then dc.String = "0"       end
+    if fc and fc.String == "" then fc.String = "0"       end
+    if cc and cc.String == "" then cc.String = "Linear"  end
+  end
+
+  -- ── Per-output timer state ──────────────────────────────────
+  local state = {}
+  for i = 1, numOut do
+    state[i] = {
+      delayTmr  = Timer.New(),
+      fadeTmr   = Timer.New(),
+      fadeStart = 0,
+      fadeEnd   = 0,
+      fadeDur   = 0,
+      fadeElap  = 0,
+      fadeCurve = "Linear",
+    }
+  end
+
+  -- ── Easing ──────────────────────────────────────────────────
+  local function applyCurve(p, curve)
+    if     curve == "Ease In"     then return p * p
+    elseif curve == "Ease Out"    then return 1 - (1-p)^2
+    elseif curve == "Ease In/Out" then return p < 0.5 and 2*p*p or 1 - 2*(1-p)^2
+    else                               return p
+    end
+  end
+
+  -- ── Toggle state ────────────────────────────────────────────
+  local togglePos = 1   -- 1-based index into the enabled output list
+
+  local function getEnabledList()
+    local list = {}
+    for i = 1, numOut do
+      local e = Controls[string.format("Out%d_Enabled", i)]
+      if e and e.Boolean then list[#list+1] = i end
+    end
+    return list
+  end
+
+  local function clearActiveIndicators()
+    for i = 1, numOut do
+      local a = Controls[string.format("Out%d_Active", i)]
+      if a then a.Boolean = false end
+    end
+  end
+
+  local function setActiveIndicator(idx)
+    clearActiveIndicators()
+    if idx then
+      local a = Controls[string.format("Out%d_Active", idx)]
+      if a then a.Boolean = true end
+    end
+  end
+
+  -- ── Execute one output (called after any delay has elapsed) ─
+  local function doFire(i)
+    local p          = string.format("Out%d_", i)
+    local outputCtrl = Controls[p.."Output"]
+    if not outputCtrl then return end
+
+    local cueType  = Controls[p.."Type"]  and Controls[p.."Type"].String  or "Trigger"
+    local cueValue = Controls[p.."Value"] and Controls[p.."Value"].String or ""
+    local fadeSec  = tonumber(Controls[p.."Fade"]  and Controls[p.."Fade"].String)  or 0
+    local curve    = Controls[p.."Curve"] and Controls[p.."Curve"].String or "Linear"
+    local s        = state[i]
+
+    -- Cancel any running fade for this output
+    s.fadeTmr:Stop()
+    s.fadeTmr.EventHandler = function() end
+
+    if cueType == "Trigger" then
+      -- Momentary pulse: true for 50 ms then back to false
+      outputCtrl.Boolean = true
+      outputCtrl.String  = cueValue ~= "" and cueValue or "1"
+      outputCtrl.Value   = 1
+      Timer.CallAfter(function()
+        outputCtrl.Boolean = false
+        outputCtrl.Value   = 0
+      end, 0.05)
+
+    elseif cueType == "Boolean On" then
+      outputCtrl.Boolean = true
+      outputCtrl.String  = "true"
+      outputCtrl.Value   = 1
+
+    elseif cueType == "Boolean Off" then
+      outputCtrl.Boolean = false
+      outputCtrl.String  = "false"
+      outputCtrl.Value   = 0
+
+    elseif cueType == "String" then
+      outputCtrl.String  = cueValue
+      outputCtrl.Value   = tonumber(cueValue) or 0
+      outputCtrl.Boolean = (cueValue ~= "" and cueValue ~= "0" and cueValue ~= "false")
+
+    elseif cueType == "Numeric" then
+      local target = tonumber(cueValue) or 0
+      if fadeSec > 0 then
+        s.fadeStart = tonumber(outputCtrl.String) or 0
+        s.fadeEnd   = target
+        s.fadeDur   = fadeSec
+        s.fadeElap  = 0
+        s.fadeCurve = curve
+        local interval = 1 / 30
+        s.fadeTmr.EventHandler = function()
+          s.fadeElap = s.fadeElap + interval
+          local prog = math.min(s.fadeElap / s.fadeDur, 1.0)
+          local val  = s.fadeStart + (s.fadeEnd - s.fadeStart) * applyCurve(prog, s.fadeCurve)
+          outputCtrl.String = string.format("%.4g", val)
+          outputCtrl.Value  = val
+          if prog >= 1.0 then
+            s.fadeTmr:Stop()
+            s.fadeTmr.EventHandler = function() end
+            outputCtrl.String = tostring(s.fadeEnd)
+            outputCtrl.Value  = s.fadeEnd
+          end
+        end
+        s.fadeTmr:Start(interval)
+      else
+        outputCtrl.String = tostring(target)
+        outputCtrl.Value  = target
+      end
+    end
+  end
+
+  -- ── Fire one output, honouring its delay ────────────────────
+  local function fireOutput(i)
+    local s        = state[i]
+    local dc       = Controls[string.format("Out%d_Delay", i)]
+    local delaySec = tonumber(dc and dc.String) or 0
+
+    -- Cancel any pending delay / fade
+    s.delayTmr:Stop()
+    s.delayTmr.EventHandler = function() end
+    s.fadeTmr:Stop()
+    s.fadeTmr.EventHandler = function() end
+
+    if delaySec > 0 then
+      s.delayTmr.EventHandler = function()
+        s.delayTmr:Stop()
+        s.delayTmr.EventHandler = function() end
+        doFire(i)
+      end
+      s.delayTmr:Start(delaySec)
+    else
+      doFire(i)
+    end
+  end
+
+  -- ── Main dispatcher ──────────────────────────────────────────
+  local function onTrigger()
+    local mode = Controls.Mode.String or "Fire All"
+
+    if mode == "Toggle Step" then
+      local list = getEnabledList()
+      if #list == 0 then return end
+      if togglePos > #list then togglePos = 1 end
+
+      local idx      = list[togglePos]
+      local firedPos = togglePos
+
+      setActiveIndicator(idx)
+      fireOutput(idx)
+
+      -- Advance to next step
+      togglePos = togglePos % #list + 1
+      Controls.Toggle_Index.String = tostring(firedPos) .. "/" .. tostring(#list)
+
+    else  -- "Fire All"
+      clearActiveIndicators()
+      for i = 1, numOut do
+        local e = Controls[string.format("Out%d_Enabled", i)]
+        if e and e.Boolean then fireOutput(i) end
+      end
+    end
+  end
+
+  -- ── Reset toggle ─────────────────────────────────────────────
+  Controls.Toggle_Reset.EventHandler = function()
+    togglePos = 1
+    local list = getEnabledList()
+    Controls.Toggle_Index.String = "1/" .. tostring(math.max(#list, 1))
+    clearActiveIndicators()
+  end
+
+  -- ── Input handlers ────────────────────────────────────────────
+  Controls.Trigger_In.EventHandler  = function()    onTrigger() end
+  Controls.Bool_In.EventHandler     = function()    onTrigger() end
+  Controls.String_In.EventHandler   = function(c)
+    if c.String ~= "" then onTrigger() end
+  end
+  Controls.Value_In.EventHandler    = function()    onTrigger() end
+
+  -- Initial display
+  do
+    local list = getEnabledList()
+    Controls.Toggle_Index.String = "1/" .. tostring(math.max(#list, 1))
+  end
+
+end
